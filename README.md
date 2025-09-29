@@ -1,2 +1,2 @@
 # Laberinto
-Código para el proyecto Candidates 2025 en el Tecnológico de Monterrey. Desarrollé un robot autónomo capaz de recorrer un laberinto, detectar hojas de colores en el suelo y subir una rampa al final. Utiliza sensores de distancia y giroscopios para navegación y detección en el entorno del laberinto.
+Código para el proyecto Candidates 2025 en el Tecnológico de Monterrey. Se desarolla un robot autónomo capaz de recorrer un pista, tipo seguidor de linea, los componentes importantes es el modulo seguidor de linea, los puentes h, giroscopio para implementación del sistema PID. 
