@@ -1,143 +1,274 @@
 #include <Wire.h>
 #include <MPU6050.h>
-#include <PID_v1.h>  
-const int ledVerde = 6;
-const int ledRojo = 7;
-const int ledArduino = 13;  
-const int trigPin = 23;  
-const int echoPin = 22;  
-
-long duration;
-int distance;
 
 MPU6050 mpu;
 
-double setpoint = 90;  
-double input, output;
-double Kp = 1, Ki = 0, Kd = 0;  
+// Pines
+const int ledRojo = 7;
+const int ledVerde = 6;
+const int ledamarillo = 5;
+const int trig = 23;
+const int echo = 22;
 
-PID myPID(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
+// Variables MPU
+int16_t gx, gy, gz;
+float anguloZ = 0;
+float anguloOffset = 0;
+unsigned long tiempoPrevio = 0;
 
-double gz_offset = 0;   
-long sum_gz = 0;  
-int sampleCount = 100;  
+// Variables PID
+float anguloDeseado = 0;
+float error, errorAnterior = 0, integral = 0;
+float Kp = 1.5;
+float Ki = 0.01;
+float Kd = 0.3;
 
-bool isTurning = false;  
+bool girando = false;
+
+// Variables para control híbrido
+int contadorEstable = 0;
+const int CICLOS_ESTABILIDAD = 5; // 5 ciclos ≈ 250ms
+const float UMBRAL_VELOCIDAD = 3.0; // 3°/s - velocidad máxima para considerar "detenido"
+const float UMBRAL_ERROR = 3.0; // ±3° de error aceptable
+
 void setup() {
-  Serial.begin(115200);
-  
-  
-  pinMode(ledVerde, OUTPUT);
   pinMode(ledRojo, OUTPUT);
-  pinMode(ledArduino, OUTPUT);  
-  pinMode(trigPin, OUTPUT);
-  pinMode(echoPin, INPUT);
+  pinMode(ledVerde, OUTPUT);
+  pinMode(ledamarillo, OUTPUT);
+  pinMode(trig, OUTPUT);
+  pinMode(echo, INPUT);
   
+  Serial.begin(9600);
+  Serial.println("🤖 SISTEMA DE NAVEGACIÓN ROBOT");
+  Serial.println("================================");
   
   Wire.begin();
   mpu.initialize();
   
-  
   if (mpu.testConnection()) {
-    Serial.println("MPU6050 conectado correctamente.");
+    Serial.println("✅ MPU6050 - CONECTADO");
   } else {
-    Serial.println("Error al conectar el MPU6050.");
-    while(1); 
+    Serial.println("❌ MPU6050 - FALLO");
+    while(1);
   }
-  
   
   calibrarGiroscopio();
-  
-  
-  myPID.SetMode(AUTOMATIC);
-  myPID.SetOutputLimits(-255, 255);  
-  
-  digitalWrite(ledVerde, LOW);
-  digitalWrite(ledRojo, LOW);
-  digitalWrite(ledArduino, LOW); 
+  Serial.println("🎯 SISTEMA LISTO - Buscando obstáculos...");
+  Serial.println();
 }
+
 void loop() {
+  // Actualizar ángulo continuamente
+  actualizarAngulo();
   
-  distanciaUltrasonico();
-  
-  if (distance < 15 && !isTurning) {
+  // Solo procesar ultrasonico si NO estamos girando
+  if (!girando) {
+    float distancia = medirDistancia();
     
-    digitalWrite(ledArduino, HIGH);  
+    // Mostrar siempre la distancia y ángulo
+    Serial.print("📏 Distancia: ");
+    Serial.print(distancia);
+    Serial.print(" cm");
     
+    Serial.print(" | 🎯 Angulo: ");
+    Serial.print(anguloZ, 1);
+    Serial.println("°");
     
-    digitalWrite(ledRojo, LOW);  
-    digitalWrite(ledVerde, HIGH);  
-    Serial.println("Obstáculo detectado. Girando a la derecha.");
-    girarDerecha(90);  
-    isTurning = true;  
-    digitalWrite(ledVerde, LOW);  
-    digitalWrite(ledArduino, LOW);  
-  } else {
-   
-    digitalWrite(ledRojo, LOW);  
-    digitalWrite(ledVerde, LOW); 
-    digitalWrite(ledArduino, LOW);  
-    Serial.println("En línea recta");
-  }
-  delay(100);  
-}
-void distanciaUltrasonico() {
-  
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
-  
- 
-  duration = pulseIn(echoPin, HIGH);
-  
-  
-  distance = duration * 0.0344 / 2;  
-}
-void girarDerecha(int grados) {
-  int16_t gx, gy, gz;
-  double desired_angle = grados;  
-  
-  while (abs(input) < desired_angle) {
-    
-    mpu.getRotation(&gx, &gy, &gz);
-    
-    
-    gz -= gz_offset;  
-    
-    
-    input = gz;
-    
-    
-    myPID.Compute();
-    
-    
-    if (input > setpoint) {
-      digitalWrite(ledRojo, HIGH);  
-      digitalWrite(ledVerde, LOW);  
+    // 🚨 DETECCIÓN DE OBSTÁCULO
+    if (distancia < 15.0 && distancia > 2.0) {
+      Serial.println();
+      Serial.println("🚨 ¡OBSTÁCULO DETECTADO! Iniciando giro de 90°...");
+      Serial.println();
+      iniciarGiro90Grados();
     }
-    
-    else if (input < setpoint) {
-      digitalWrite(ledVerde, HIGH);  
-      digitalWrite(ledRojo, LOW);    
-    }
-    delay(100);  
   }
   
-  digitalWrite(ledVerde, LOW);  
+  delay(100);
 }
+
+void actualizarAngulo() {
+  mpu.getRotation(&gx, &gy, &gz);
+  
+  unsigned long tiempoActual = millis();
+  float deltaT = (tiempoActual - tiempoPrevio) / 1000.0;
+  
+  // Evitar deltaT muy grandes
+  if (deltaT > 0.1) deltaT = 0.01;
+  
+  tiempoPrevio = tiempoActual;
+  
+  // ⭐ CORRECCIÓN: Usar el factor de escala correcto para el MPU6050
+  float velocidadZ = (gz / 131.0) - anguloOffset;
+  
+  // Solo integrar si hay movimiento significativo
+  if (abs(velocidadZ) > 0.3) {
+    anguloZ += velocidadZ * deltaT;
+  }
+}
+
 void calibrarGiroscopio() {
-  sum_gz = 0;  
-  for (int i = 0; i < sampleCount; i++) {
-    int16_t gx, gy, gz;
+  Serial.println("🔧 Calibrando MPU6050... NO MOVER!");
+  delay(2000);
+  
+  long suma = 0;
+  int lecturas = 500;
+  
+  for(int i = 0; i < lecturas; i++) {
     mpu.getRotation(&gx, &gy, &gz);
-    sum_gz += gz;
-    delay(10);  
+    suma += gz;
+    delay(5);
   }
   
+  // Calcular offset en las mismas unidades que usaremos
+  anguloOffset = (float)suma / lecturas / 131.0;
+  anguloZ = 0;
+  tiempoPrevio = millis();
   
-  gz_offset = sum_gz / sampleCount;
-  Serial.print("Calibración completada. Offset de gz: ");
-  Serial.println(gz_offset);
+  Serial.print("📊 Offset calculado: ");
+  Serial.println(anguloOffset, 6);
+  Serial.println("✅ Calibración completada");
+}
+
+float medirDistancia() {
+  digitalWrite(trig, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+  
+  long duracion = pulseIn(echo, HIGH, 30000);
+  if (duracion == 0) return 999;
+  return duracion * 0.034 / 2;
+}
+
+void iniciarGiro90Grados() {
+  girando = true;
+  
+  // Guardar ángulo inicial
+  float anguloInicial = anguloZ;
+  
+  // Definir objetivo: -90 grados desde la posición actual
+  anguloDeseado = anguloInicial - 90.0;
+  
+  // Resetear variables PID y control híbrido
+  integral = 0;
+  errorAnterior = 0;
+  contadorEstable = 0;
+  
+  Serial.println("🔄 INICIANDO SECUENCIA DE GIRO");
+  Serial.println("===============================");
+  Serial.print("🎯 Angulo inicial: ");
+  Serial.print(anguloInicial, 1);
+  Serial.print("° | Angulo objetivo: ");
+  Serial.print(anguloDeseado, 1);
+  Serial.println("°");
+  Serial.println();
+  
+  while (girando) {
+    actualizarAngulo();
+    
+    error = anguloDeseado - anguloZ;
+    
+    // 📊 MOSTRAR INFORMACIÓN MEJORADA
+    Serial.print("Actual: ");
+    Serial.print(anguloZ, 1);
+    Serial.print("° | Objetivo: ");
+    Serial.print(anguloDeseado, 1);
+    Serial.print("° | Error: ");
+    Serial.print(error, 1);
+    Serial.print("° | Giro: ");
+    
+    // Calcular PID
+    integral += error;
+    // Limitar integral para evitar windup
+    if (integral > 100) integral = 100;
+    if (integral < -100) integral = -100;
+    
+    float derivativo = error - errorAnterior;
+    float salidaPID = (Kp * error) + (Ki * integral) + (Kd * derivativo);
+    errorAnterior = error;
+    
+    // Controlar LEDs y mostrar indicador visual (umbrales más sensibles)
+    if (salidaPID < -0.5) {
+      // Necesita girar MÁS a la DERECHA
+      if(error>-10 && error<0){
+        digitalWrite(ledamarillo, HIGH);\
+        digitalWrite(ledRojo, HIGH);
+        digitalWrite(ledVerde, LOW);
+        Serial.println("🔴 DERECHA");
+      }
+      else{
+        digitalWrite(ledamarillo, LOW);
+        digitalWrite(ledRojo, HIGH);
+        digitalWrite(ledVerde, LOW);
+        Serial.println("🔴 DERECHA");
+      }
+    } 
+    else if (salidaPID > 0.5) {
+      // Se PASÓ, necesita corregir a la IZQUIERDA
+      if(error<10 && error>0){
+        digitalWrite(ledamarillo, HIGH);
+        digitalWrite(ledRojo, LOW);
+        digitalWrite(ledVerde, HIGH);
+        Serial.println("🟢 IZQUIERDA");
+      }
+      else{
+        digitalWrite(ledamarillo, LOW);
+        digitalWrite(ledRojo, LOW);
+        digitalWrite(ledVerde, HIGH);
+        Serial.println("🟢 IZQUIERDA");
+      }
+    }
+    else {
+      // Muy cerca del objetivo
+      digitalWrite(ledamarillo, LOW);
+      digitalWrite(ledRojo, LOW);
+      digitalWrite(ledVerde, LOW);
+      Serial.println("⚪ OK");
+    }
+    
+    // ⭐⭐ ESTRATEGIA HÍBRIDA MEJORADA - Control de posición + velocidad + histéresis
+    float velocidadAngular = gz / 131.0;
+    bool enPosicion = (abs(error) <= UMBRAL_ERROR);
+    bool velocidadBaja = (abs(velocidadAngular) < UMBRAL_VELOCIDAD);
+    
+    if (enPosicion && velocidadBaja) {
+      contadorEstable++;
+      Serial.print(" [Estable: ");
+      Serial.print(contadorEstable);
+      Serial.print("/");
+      Serial.print(CICLOS_ESTABILIDAD);
+      Serial.print("]");
+      
+      if (contadorEstable >= CICLOS_ESTABILIDAD) {
+        Serial.println();
+        Serial.println("✅ GIRO COMPLETADO Y ESTABILIZADO!");
+        Serial.print("📊 Giro realizado: ");
+        Serial.print(anguloZ - anguloInicial, 1);
+        Serial.println("°");
+        
+        girando = false;
+        
+        // ⭐ RESETEAR ÁNGULO A CERO después del giro
+        anguloZ = 0;
+        break;
+      }
+    } else {
+      // Resetear contador si se mueve o sale de posición
+      contadorEstable = 0;
+    }
+    
+    Serial.println(); // Nueva línea para cada ciclo
+    delay(50); // Control loop rate
+  }
+  
+  // Asegurar que LEDs estén apagados al final
+  digitalWrite(ledRojo, LOW);
+  digitalWrite(ledVerde, LOW);
+  digitalWrite(ledamarillo, LOW);
+  
+  Serial.println();
+  Serial.println("🔄 Volviendo a modo navegación...");
+  Serial.println();
+  delay(1000);
 }
