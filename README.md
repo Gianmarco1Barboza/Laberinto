@@ -1,2 +1,2 @@
 # Laberinto
-Código para el proyecto Candidates 2025 en el Tecnológico de Monterrey. Se desarolla un robot autónomo capaz de recorrer un pista, tipo seguidor de linea, los componentes importantes es el modulo seguidor de linea, los puentes h, giroscopio para implementación del sistema PID. 
+Código para el proyecto Candidates 2025 en el Tecnológico de Monterrey. Se desarolla un robot autónomo capaz de recorrer un labernto con obstaculos, detectar colores, en el piso, recorrer una rampa y bajarla sin tocar las paredes, usar logica matricial para saber en donde estoy en todo momento, ultrasonicos y giroscopio para implementacion del PID, controlar cada llanta con dos puente h es de vital importancia.
