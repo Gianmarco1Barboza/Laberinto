@@ -1,0 +1,36 @@
+const int trigPin = 22;
+const int echoPin = 23;
+
+// Variable para duración del pulso y distancia calculada
+long duration;
+float distance;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+}
+
+void loop() {
+  
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+
+ 
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  
+  duration = pulseIn(echoPin, HIGH);
+
+  // Calcula distancia (velocidad del sonido ≈ 343 m/s)
+  distance = duration * 0.0343 / 2;
+
+  
+  Serial.print("Distancia: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  delay(500); 
+}
